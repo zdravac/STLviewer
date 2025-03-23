@@ -1,10 +1,10 @@
 # STL Viewer
 
-A Python-based 3D viewer for STL and 3MF files using VTK (Visualization Toolkit).
+A Python-based 3D viewer for STL and 3MF (not implemented yet) files using VTK (Visualization Toolkit).
 
 ## Features
 
-- Load and view STL and 3MF files
+- Load and view STL and 3MF (not implemented yet) files
 - Interactive 3D manipulation
 - Adjustable lighting and colors
 - Model orientation axes
