@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""
+STL/3MF Viewer - Main application window with file browser
+"""
+import sys
+import platform
+import os
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QFileDialog, QMenuBar, QStatusBar, QToolBar, QTreeView,
+    QDockWidget, QMessageBox, QLabel, QColorDialog, QSpinBox,
+    QGroupBox, QCheckBox
+)
+from PyQt6.QtCore import Qt, QSize, QDir
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QSurfaceFormat, QFileSystemModel
+import vtk
+from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from object_manager import ObjectTreeWidget, ObjectProperties, Color3MF
+from viewer import ModelViewer
+
+def configure_surface_format():
+    """Configure OpenGL surface format"""
+    fmt = QSurfaceFormat()
+    fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
+    
+    if platform.system() == 'Darwin':
+        fmt.setVersion(3, 2)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    else:
+        fmt.setVersion(2, 0)
+        
+    fmt.setSwapBehavior(QSurfaceFormat.SwapBehavior.DoubleBuffer)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+    fmt.setSamples(4)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
+class FileTreeView(QTreeView):
+    """Custom tree view for file browsing"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.model = QFileSystemModel()
+        self.model.setNameFilters(['*.stl', '*.3mf'])
+        self.model.setNameFilterDisables(False)
+        self.model.setFilter(QDir.Filter.NoDotAndDotDot | QDir.Filter.Files | QDir.Filter.AllDirs)
+        self.setModel(self.model)
+        
+        # Hide unnecessary columns
+        self.setColumnHidden(1, True)  # Size
+        self.setColumnHidden(2, True)  # Type
+        self.setColumnHidden(3, True)  # Date Modified
+        
+        self.setHeaderHidden(True)
+        self.setSortingEnabled(True)
+        self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("STL/3MF Viewer")
+        self.resize(1200, 800)
+
+        # Create central widget with horizontal layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create file browser on the left (30% width)
+        self.file_tree = FileTreeView()
+        self.file_tree.setMaximumWidth(int(self.width() * 0.3))
+        main_layout.addWidget(self.file_tree)
+
+        # Create viewer container on the right
+        viewer_container = QWidget()
+        viewer_layout = QVBoxLayout(viewer_container)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(viewer_container)
+
+        # Create and setup VTK render window
+        self.vtk_widget = QVTKRenderWindowInteractor(viewer_container)
+        render_window = self.vtk_widget.GetRenderWindow()
+
+        # Create renderer and add to window
+        renderer = vtk.vtkRenderer()
+        render_window.AddRenderer(renderer)
+        render_window.SetAlphaBitPlanes(1)
+        render_window.SetMultiSamples(0)  # Disable MSAA for better compatibility
+
+        # Set better rendering defaults
+        renderer.SetUseDepthPeeling(1)
+        renderer.SetMaximumNumberOfPeels(4)
+        renderer.SetOcclusionRatio(0.0)
+        renderer.SetUseFXAA(True)  # Enable FXAA antialiasing
+        renderer.SetBackground(0.2, 0.2, 0.2)  # Set a darker background
+
+        viewer_layout.addWidget(self.vtk_widget)
+        
+        self.viewer = ModelViewer(renderer)
+        self.viewer.model_loaded.connect(self._on_model_loaded)
+        self.viewer.model_stats_updated.connect(self._update_stats_display)
+        
+        # Initialize tools
+        self.viewer.initialize_tools(self)
+
+        # Create dock widget for object properties
+        dock = QDockWidget("Properties", self)
+        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.object_tree = ObjectTreeWidget()
+        dock.setWidget(self.object_tree)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+
+        # Connect viewer signals to object tree
+        self.viewer.object_properties_changed.connect(self._update_object_properties)
+
+        # Connect object tree signals
+        self.object_tree.object_visibility_changed.connect(self.viewer.set_object_visibility)
+        self.object_tree.object_color_changed.connect(self.viewer.set_object_color)
+        self.object_tree.object_opacity_changed.connect(self.viewer.set_object_opacity)
+        self.object_tree.object_wireframe_changed.connect(self.viewer.set_object_wireframe)
+        self.object_tree.object_shadows_changed.connect(self.viewer.set_object_shadows)
+
+        # Connect file tree selection
+        self.file_tree.clicked.connect(self._on_file_selected)
+
+        # Set up menus and toolbars
+        self._create_actions()
+        self._create_menus()
+        self._create_toolbars()
+        
+        # Set up status bar
+        self.statusBar().showMessage("Ready")
+        self.stats_label = QLabel()
+        self.statusBar().addPermanentWidget(self.stats_label)
+
+        # Start interactor
+        self.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
+        self.iren.Initialize()
+        
+        # Set default camera mode
+        self.viewer.set_camera_mode('trackball')
+
+        # Extra VTK settings for better rendering
+        if platform.system() == 'Darwin':
+            render_window.SetMultiSamples(0)
+            renderer.SetUseFXAA(True)
+
+        # Set initial directory for file browser
+        self.set_file_browser_root()
+
+    def set_file_browser_root(self, path=None):
+        """Set the root path for the file browser"""
+        if path is None:
+            # Use home directory as default
+            path = os.path.expanduser("~")
+            path = os.path.expanduser("~")
+        
+        self.file_tree.model.setRootPath(path)
+        self.file_tree.setRootIndex(self.file_tree.model.index(path))
+    def _on_file_selected(self, index):
+        """Handle file selection in the tree view"""
+        file_path = self.file_tree.model.filePath(index)
+        if os.path.isfile(file_path):
+            self._load_file(file_path)
+
+    def _create_actions(self):
+        """Create all actions for menus and toolbars"""
+        # File actions
+        self.set_root_action = QAction("Set Root Folder...", self)
+        self.set_root_action.triggered.connect(self._select_root_folder)
+
+        self.save_screenshot_action = QAction("Save Screenshot...", self)
+        self.save_screenshot_action.setShortcut("Ctrl+P")
+        self.save_screenshot_action.triggered.connect(self.viewer.take_screenshot)
+
+        self.save_hi_res_screenshot_action = QAction("Save Hi-Res Screenshot...", self)
+        self.save_hi_res_screenshot_action.triggered.connect(
+            lambda: self.viewer.take_high_res_screenshot(4)
+        )
+
+        self.exit_action = QAction("E&xit", self)
+        self.exit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        self.exit_action.triggered.connect(self.close)
+
+        # View actions
+        self.reset_view_action = QAction("Reset View", self)
+        self.reset_view_action.setShortcut("Ctrl+R")
+        self.reset_view_action.triggered.connect(self.viewer.reset_view)
+
+        self.center_action = QAction("Center", self)
+        self.center_action.setShortcut("Ctrl+C")
+        self.center_action.triggered.connect(self.viewer.center_model)
+
+        # Initially disable actions that require a model
+        self._on_model_loaded(False)
+
+    def _create_menus(self):
+        """Create all menus"""
+        # File menu
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction(self.set_root_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.save_screenshot_action)
+        file_menu.addAction(self.save_hi_res_screenshot_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.exit_action)
+
+        # View menu
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.reset_view_action)
+        view_menu.addAction(self.center_action)
+        
+        # Appearance menu
+        self._create_appearance_menu()
+    def _create_toolbars(self):
+        """Create all toolbars"""
+        # View toolbar
+        view_toolbar = self.addToolBar("View")
+        view_toolbar.addAction(self.reset_view_action)
+        view_toolbar.addAction(self.center_action)
+
+    def _select_root_folder(self):
+        """Open dialog to select root folder for file browser"""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Root Folder",
+            os.path.expanduser("~"),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if folder:
+            self.set_file_browser_root(folder)
+
+    def _load_file(self, file_path: str):
+        """Load a 3D model file"""
+        ext = os.path.splitext(file_path)[1].lower()
+        success = False
+        
+        if ext == '.stl':
+            success = self.viewer.load_stl(file_path)
+        elif ext == '.3mf':
+            success = self.viewer.load_3mf(file_path)
+        
+        if success:
+            self.statusBar().showMessage(f"Loaded {os.path.basename(file_path)}")
+        else:
+            QMessageBox.critical(self, "Error", f"Failed to load {os.path.basename(file_path)}")
+
+    def _on_model_loaded(self, success: bool):
+        """Handle model loading completion"""
+        if success:
+            # Clear the object tree before adding new object
+            self.object_tree.clear_objects()
+            
+            # Update status bar
+            self.statusBar().showMessage("Model loaded successfully")
+        
+        # Enable/disable actions based on whether a model is loaded
+        self.save_screenshot_action.setEnabled(success)
+        self.save_hi_res_screenshot_action.setEnabled(success)
+        self.reset_view_action.setEnabled(success)
+        self.center_action.setEnabled(success)
+
+    def _update_stats_display(self, stats):
+        """Update model statistics in status bar"""
+        self.stats_label.setText(
+            f"Vertices: {stats.vertices} | "
+            f"Faces: {stats.faces} | "
+            f"Volume: {stats.volume:.2f} | "
+            f"Surface Area: {stats.surface_area:.2f}"
+        )
+
+    def closeEvent(self, event):
+        """Handle window close event"""
+        if self.vtk_widget:
+            render_window = self.vtk_widget.GetRenderWindow()
+            if render_window:
+                render_window.Finalize()
+            
+            if self.iren:
+                self.iren.TerminateApp()
+        
+        super().closeEvent(event)
+
+    def _update_object_properties(self, props):
+        """Update object properties in the tree"""
+        # Add new object to tree if it doesn't exist
+        
+        # Add new object to tree if it doesn't exist
+        if props.name not in self.object_tree.property_widgets:
+            self.object_tree.add_object(props.name)
+        
+        # Update property widget
+        prop_widget = self.object_tree.property_widgets[props.name]
+        prop_widget.visibility_check.setChecked(props.visible)
+        prop_widget.opacity_slider.setValue(int(props.opacity * 100))
+        prop_widget.wireframe_check.setChecked(props.wireframe)
+        prop_widget.cast_shadows_check.setChecked(props.cast_shadows)
+        prop_widget.receive_shadows_check.setChecked(props.receive_shadows)
+        
+    def _create_appearance_menu(self):
+        """Create appearance menu for color and lighting controls"""
+        appearance_menu = self.menuBar().addMenu("&Appearance")
+        
+        # Background color action
+        bg_color_action = QAction("Set Background Color...", self)
+        bg_color_action.triggered.connect(self._set_background_color)
+        appearance_menu.addAction(bg_color_action)
+        
+        # Background gradient action
+        bg_gradient_action = QAction("Enable Background Gradient", self)
+        bg_gradient_action.setCheckable(True)
+        bg_gradient_action.setChecked(False)
+        bg_gradient_action.triggered.connect(self._toggle_background_gradient)
+        appearance_menu.addAction(bg_gradient_action)
+        
+        appearance_menu.addSeparator()
+        
+        # Model color action
+        model_color_action = QAction("Set Model Color...", self)
+        model_color_action.triggered.connect(self._set_model_color)
+        appearance_menu.addAction(model_color_action)
+        
+        appearance_menu.addSeparator()
+        
+        # Lighting submenu
+        lighting_menu = appearance_menu.addMenu("Lighting")
+        
+        # Ambient light control
+        ambient_action = QAction("Ambient Light", self)
+        ambient_action.setCheckable(True)
+        ambient_action.setChecked(True)
+        ambient_action.triggered.connect(lambda checked: self.viewer.toggle_light('ambient', checked))
+        lighting_menu.addAction(ambient_action)
+        
+        # Key light control
+        key_action = QAction("Key Light", self)
+        key_action.setCheckable(True)
+        key_action.setChecked(True)
+        key_action.triggered.connect(lambda checked: self.viewer.toggle_light('key', checked))
+        lighting_menu.addAction(key_action)
+        
+        # Fill light control
+        fill_action = QAction("Fill Light", self)
+        fill_action.setCheckable(True)
+        fill_action.setChecked(True)
+        fill_action.triggered.connect(lambda checked: self.viewer.toggle_light('fill', checked))
+        lighting_menu.addAction(fill_action)
+        
+        # Rim light control
+        rim_action = QAction("Rim Light", self)
+        rim_action.setCheckable(True)
+        rim_action.setChecked(True)
+        rim_action.triggered.connect(lambda checked: self.viewer.toggle_light('rim', checked))
+        lighting_menu.addAction(rim_action)
+    
+    def _set_background_color(self):
+        """Open color picker for background color"""
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.viewer.set_background_color(color.getRgbF()[:3])
+    
+    def _toggle_background_gradient(self, enabled):
+        """Toggle background gradient"""
+        self.viewer.set_background_gradient(enabled)
+    
+    def _set_model_color(self):
+        """Open color picker for model color"""
+        color = QColorDialog.getColor()
+        if color.isValid():
+            selected_items = self.object_tree.selectedItems()
+            if selected_items:
+                for item in selected_items:
+                    name = item.text(0)
+                    self.viewer.set_object_color(name, color.getRgbF()[:3])
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    configure_surface_format()
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
