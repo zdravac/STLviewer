@@ -1,2 +1,4 @@
-vtk
-PyQt5
+vtk>=9.4.1
+PyQt6>=6.8.1
+numpy>=2.2.4
+pyinstaller>=6.12.0

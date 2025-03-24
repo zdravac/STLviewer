@@ -2,19 +2,17 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QFileDialog, QMenuBar, QStatusBar, QToolBar, QTreeView,
-    QDockWidget, QMessageBox, QLabel, QColorDialog, QSpinBox,
-    QGroupBox, QCheckBox, QSlider, QWidgetAction
-)
-from PyQt6.QtGui import QAction, QKeySequence, QStandardItemModel, QStandardItem, QIcon
-from PyQt6.QtCore import Qt, QSettings, QDir, QSize
+from PyQt6.QtWidgets import QWidget, QMainWindow, QMessageBox, QWidgetAction, QFileDialog, QColorDialog, QTreeView, \
+    QLabel, QHBoxLayout, QVBoxLayout, QSlider, QApplication
+from PyQt6.QtGui import QAction, QKeySequence, QStandardItemModel, QStandardItem
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QStyle
 from src.viewer import ModelViewer
 from src.settings_manager import SettingsManager
 import vtk
-from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+# from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+# from vtkmodules.qt.PyQt6.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 class MainWindow(QMainWindow):
     def __init__(self):

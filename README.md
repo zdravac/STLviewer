@@ -16,7 +16,7 @@ A Python-based 3D viewer for STL and 3MF (not implemented yet) files using VTK (
 
 - Python 3.x
 - VTK
-- PyQt5
+- PyQt6
 
 ## Installation
 
