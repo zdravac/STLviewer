@@ -1,0 +1,197 @@
+name: Build Release Packages
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name=STLviewer --windowed --noconsole --clean `
+            --hidden-import=vtkmodules.all `
+            --hidden-import=vtkmodules.util.numpy_support `
+            --hidden-import=vtkmodules.util.data_model `
+            --hidden-import=vtkmodules.util.execution_model `
+            --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor `
+            --hidden-import=PyQt6.QtCore `
+            --hidden-import=PyQt6.QtGui `
+            --hidden-import=PyQt6.QtWidgets `
+            --collect-data=vtkmodules `
+            --collect-data=vtk `
+            src/main.py
+            
+      - name: Create ZIP archive
+        run: |
+          cd dist
+          Compress-Archive -Path STLviewer -DestinationPath STLviewer-windows-x64.zip
+          
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/STLviewer-windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+          sudo apt-get update
+          sudo apt-get install -y fakeroot dpkg-dev
+          
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name=STLviewer --windowed --clean \
+            --hidden-import=vtkmodules.all \
+            --hidden-import=vtkmodules.util.numpy_support \
+            --hidden-import=vtkmodules.util.data_model \
+            --hidden-import=vtkmodules.util.execution_model \
+            --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor \
+            --hidden-import=PyQt6.QtCore \
+            --hidden-import=PyQt6.QtGui \
+            --hidden-import=PyQt6.QtWidgets \
+            --collect-data=vtkmodules \
+            --collect-data=vtk \
+            src/main.py
+            
+      - name: Create DEB package
+        run: |
+          mkdir -p deb_dist/DEBIAN
+          mkdir -p deb_dist/usr/local/bin
+          mkdir -p deb_dist/usr/share/applications
+          mkdir -p deb_dist/usr/share/icons/hicolor/128x128/apps
+          
+          # Copy executable files
+          cp -r dist/STLviewer/* deb_dist/usr/local/bin/
+          
+          # Create desktop entry
+          echo "[Desktop Entry]
+          Name=STL Viewer
+          Comment=View STL 3D model files
+          Exec=/usr/local/bin/STLviewer
+          Icon=stlviewer
+          Terminal=false
+          Type=Application
+          Categories=Graphics;3DGraphics;" > deb_dist/usr/share/applications/stlviewer.desktop
+          
+          # Copy icon if it exists, or create a placeholder
+          if [ -f "STLviewer.png" ]; then
+            cp STLviewer.png deb_dist/usr/share/icons/hicolor/128x128/apps/stlviewer.png
+          else
+            echo "No icon found, package will not include an icon"
+          fi
+          
+          # Create control file
+          echo "Package: stlviewer
+          Version: 1.0.0
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: STL Viewer Team
+          Description: STL Viewer
+            A simple application to view STL 3D model files." > deb_dist/DEBIAN/control
+          
+          # Build the package
+          fakeroot dpkg-deb --build deb_dist
+          mv deb_dist.deb STLviewer-linux-amd64.deb
+          
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: STLviewer-linux-amd64.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+  macos-universal:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+          
+      - name: Build for ARM64
+        run: |
+          pyinstaller --name=STLviewer-arm64 --windowed --clean \
+            --hidden-import=vtkmodules.all \
+            --hidden-import=vtkmodules.util.numpy_support \
+            --hidden-import=vtkmodules.util.data_model \
+            --hidden-import=vtkmodules.util.execution_model \
+            --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor \
+            --hidden-import=PyQt6.QtCore \
+            --hidden-import=PyQt6.QtGui \
+            --hidden-import=PyQt6.QtWidgets \
+            --collect-data=vtkmodules \
+            --collect-data=vtk \
+            --target-architecture=arm64 \
+            src/main.py
+      
+      - name: Build for x86_64
+        run: |
+          pyinstaller --name=STLviewer-x86_64 --windowed --clean \
+            --hidden-import=vtkmodules.all \
+            --hidden-import=vtkmodules.util.numpy_support \
+            --hidden-import=vtkmodules.util.data_model \
+            --hidden-import=vtkmodules.util.execution_model \
+            --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor \
+            --hidden-import=PyQt6.QtCore \
+            --hidden-import=PyQt6.QtGui \
+            --hidden-import=PyQt6.QtWidgets \
+            --collect-data=vtkmodules \
+            --collect-data=vtk \
+            --target-architecture=x86_64 \
+            src/main.py
+            
+      - name: Create ZIP archives
+        run: |
+          cd dist
+          zip -r STLviewer-macos-arm64.zip STLviewer-arm64.app
+          zip -r STLviewer-macos-x86_64.zip STLviewer-x86_64.app
+          
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/STLviewer-macos-arm64.zip
+            dist/STLviewer-macos-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

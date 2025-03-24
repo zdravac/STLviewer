@@ -1,0 +1,179 @@
+name: Build Release Artifacts
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+        
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller --name=STLviewer --windowed --noconsole --clean --noconfirm ^
+                 --hidden-import=vtkmodules.all ^
+                 --hidden-import=vtkmodules.util.numpy_support ^
+                 --hidden-import=vtkmodules.util.data_model ^
+                 --hidden-import=vtkmodules.util.execution_model ^
+                 --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor ^
+                 --hidden-import=PyQt6.QtCore ^
+                 --hidden-import=PyQt6.QtGui ^
+                 --hidden-import=PyQt6.QtWidgets ^
+                 --collect-data=vtkmodules ^
+                 --collect-data=vtk ^
+                 src/main.py
+      
+      - name: Create ZIP package
+        run: |
+          powershell Compress-Archive -Path "dist/STLviewer" -DestinationPath "STLviewer-windows-x64.zip"
+      
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v3
+        with:
+          name: STLviewer-windows-x64
+          path: STLviewer-windows-x64.zip
+      
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const fs = require('fs');
+            const releaseId = context.payload.release.id;
+            const fileName = 'STLviewer-windows-x64.zip';
+            
+            console.log(`Uploading ${fileName} to release ${releaseId}`);
+            
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: fileName,
+              data: fs.readFileSync(fileName)
+            });
+  
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          sudo apt-get update
+          sudo apt-get install -y fakeroot dpkg-dev debhelper
+        
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller --name=STLviewer --windowed --clean --noconfirm \
+                 --hidden-import=vtkmodules.all \
+                 --hidden-import=vtkmodules.util.numpy_support \
+                 --hidden-import=vtkmodules.util.data_model \
+                 --hidden-import=vtkmodules.util.execution_model \
+                 --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor \
+                 --hidden-import=PyQt6.QtCore \
+                 --hidden-import=PyQt6.QtGui \
+                 --hidden-import=PyQt6.QtWidgets \
+                 --collect-data=vtkmodules \
+                 --collect-data=vtk \
+                 src/main.py
+      
+      - name: Prepare DEB package structure
+        run: |
+          VERSION=$(echo ${{ github.ref_name }} | sed 's/v//g' || echo "1.0.0")
+          mkdir -p deb-package/DEBIAN
+          mkdir -p deb-package/usr/local/bin/stlviewer
+          mkdir -p deb-package/usr/share/applications
+          
+          cp -r dist/STLviewer/* deb-package/usr/local/bin/stlviewer/
+          
+          # Create control file
+          cat > deb-package/DEBIAN/control << EOF
+          Package: stlviewer
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: libc6 (>= 2.27)
+          Maintainer: $(git config --get user.name || echo "STL Viewer Team") <$(git config --get user.email || echo "stlviewer@example.com")>
+          Description: STL Viewer Application
+           A 3D model viewer for STL and 3MF files built with Python, VTK, and PyQt6.
+          EOF
+          
+          # Create desktop file
+          cat > deb-package/usr/share/applications/stlviewer.desktop << EOF
+          [Desktop Entry]
+          Name=STL Viewer
+          Comment=View STL and 3MF files
+          Exec=/usr/local/bin/stlviewer/STLviewer
+          Icon=/usr/local/bin/stlviewer/STLviewer
+          Terminal=false
+          Type=Application
+          Categories=Graphics;3DGraphics;Viewer;
+          EOF
+          
+          # Create postinst file to handle permissions
+          cat > deb-package/DEBIAN/postinst << EOF
+          #!/bin/bash
+          chmod +x /usr/local/bin/stlviewer/STLviewer
+          EOF
+          
+          chmod 755 deb-package/DEBIAN/postinst
+      
+      - name: Build DEB package
+        run: |
+          VERSION=$(echo ${{ github.ref_name }} | sed 's/v//g' || echo "1.0.0")
+          fakeroot dpkg-deb --build deb-package
+          mv deb-package.deb STLviewer-linux-amd64-${VERSION}.deb
+          ln -sf STLviewer-linux-amd64-${VERSION}.deb STLviewer-linux-amd64.deb
+      
+      - name: Upload Linux build
+        uses: actions/upload-artifact@v3
+        with:
+          name: STLviewer-linux-amd64
+          path: STLviewer-linux-amd64.deb
+      
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const fs = require('fs');
+            const releaseId = context.payload.release.id;
+            const fileName = 'STLviewer-linux-amd64.deb';
+            
+            console.log(`Uploading ${fileName} to release ${releaseId}`);
+            
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: fileName,
+              data: fs.readFileSync(fileName)
+            });
+
